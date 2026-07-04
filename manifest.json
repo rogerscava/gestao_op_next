@@ -1,0 +1,16 @@
+{
+  "name": "CALFER - Controle de OP",
+  "short_name": "Controle de OP",
+  "description": "Gestão de Ordens de Produção - CALFER Caldeiraria e Ferramentaria",
+  "start_url": "index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0f19",
+  "theme_color": "#0f1523",
+  "icons": [
+    { "src": "https://iili.io/CYuzbaV.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "https://iili.io/CYuzbaV.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "https://iili.io/CYuzbaV.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
