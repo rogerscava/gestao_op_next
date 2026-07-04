@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Histórico - Controle de OP CALFER</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0f1523">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Controle de OP">
+  <link rel="apple-touch-icon" href="https://iili.io/CYuzbaV.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-check-compat.js"></script>
+</head>
+<body class="bg-gray-900 text-white font-sans min-h-screen p-4 md:p-6">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBklrPZ1XCFoD23BZqJpqg_SNODPiA7VUo",
+      authDomain: "sistema-gestao-na-tela.firebaseapp.com",
+      databaseURL: "https://sistema-gestao-na-tela-default-rtdb.firebaseio.com",
+      projectId: "sistema-gestao-na-tela",
+      storageBucket: "sistema-gestao-na-tela.firebasestorage.app",
+      messagingSenderId: "1046960265027",
+      appId: "1:1046960265027:web:52a4443205c0bf0d65c1f6",
+      measurementId: "G-EH4NQ3XN5Q"
+    };
+    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+
+    // ===== APP CHECK (segurança) =====
+    const APP_CHECK_SITE_KEY = '6LdTlEEtAAAAAE2q7GHUrHKouUfTqU6LR_lyTXoE';
+    if (APP_CHECK_SITE_KEY && !APP_CHECK_SITE_KEY.startsWith('COLE_')) {
+      try { firebase.appCheck().activate(APP_CHECK_SITE_KEY, true); } catch(e) { console.warn('App Check falhou:', e); }
+    }
+    const db = firebase.firestore();
+
+    const JORNADA = { dias:[1,2,3,4,5], inicio:'07:00', almocoIni:'12:00', almocoFim:'13:00', fim:'17:00' };
+
+    // ===== HELPERS =====
+    const hojeStr = () => new Date().toISOString().slice(0,10);
+    const toDate = (s) => new Date(s+'T00:00:00');
+    const diffDias = (aStr, bStr) => Math.round((toDate(bStr)-toDate(aStr))/86400000);
+    const brData = (s) => s ? s.split('-').reverse().join('/') : '—';
+    const isoDia = (iso) => iso ? new Date(iso).toISOString().slice(0,10) : null;
+
+    function estaConcluida(op){ return (op.etapaAtual||0) >= (op.roteiro?.length||0); }
+    function situacaoOP(op, ref=hojeStr()){
+      if (op.cancelada) return 'Cancelada';
+      if (estaConcluida(op)) return 'Concluída';
+      if (!op.dataEntrega) return 'Aberta';
+      if (op.dataEntrega < ref) return 'Em atraso';
+      if (op.dataEntrega > ref) return 'Futura';
+      return 'Vence hoje';
+    }
+    const corSit = { 'Em atraso':'bg-red-600','Concluída':'bg-blue-600','Cancelada':'bg-gray-600','Futura':'bg-purple-600','Vence hoje':'bg-amber-500 text-black','Aberta':'bg-emerald-600' };
+
+    function criadaEmISO(op){ const r=op.roteiro||[]; return (op.historicoTempos||{})[r[0]]?.inicio || null; }
+    function concluidaEmISO(op){ const r=op.roteiro||[]; if(!estaConcluida(op)) return null; return (op.historicoTempos||{})[r[r.length-1]]?.fim || null; }
+    function entradaSetor(op, i){ if(i<=0) return op.total||0; const r=op.roteiro||[]; const a=(op.historicoTempos||{})[r[i-1]]; return (a&&typeof a.qtd==='number')?a.qtd:(op.total||0); }
+    function refugoTotal(op){ const r=op.roteiro||[]; let x=0; for(let i=0;i<r.length;i++){ const h=(op.historicoTempos||{})[r[i]]; if(h&&typeof h.qtd==='number') x+=Math.max(0,entradaSetor(op,i)-h.qtd); } return x; }
+    function atrasoDias(op){
+      if (op.cancelada || !op.dataEntrega) return 0;
+      const fim = concluidaEmISO(op);
+      if (fim) return Math.max(0, diffDias(op.dataEntrega, isoDia(fim)));
+      return Math.max(0, diffDias(op.dataEntrega, hojeStr()));
+    }
+    function parseHM(base, hm){ const [h,m]=hm.split(':').map(Number); const d=new Date(base); d.setHours(h,m,0,0); return d; }
+    function tempoUtilMin(iniISO, fimISO){
+      if(!iniISO) return 0; const ini=new Date(iniISO); const fim=fimISO?new Date(fimISO):new Date();
+      if(fim<=ini) return 0; let total=0; const cur=new Date(ini); cur.setHours(0,0,0,0); const ult=new Date(fim); ult.setHours(0,0,0,0);
+      while(cur<=ult){ if(JORNADA.dias.includes(cur.getDay())){ const bl=[[parseHM(cur,JORNADA.inicio),parseHM(cur,JORNADA.almocoIni)],[parseHM(cur,JORNADA.almocoFim),parseHM(cur,JORNADA.fim)]]; for(const [bi,bf] of bl){ const s=Math.max(bi,ini),e=Math.min(bf,fim); if(e>s) total+=(e-s)/60000; } } cur.setDate(cur.getDate()+1); }
+      return Math.floor(total);
+    }
+    function fmtMin(min){ if(min<=0) return '0m'; if(min<60) return `${min}m`; return `${Math.floor(min/60)}h ${min%60}m`; }
+    function tempoTotalOP(op){ const r=op.roteiro||[]; let t=0; r.forEach(s=>{ const h=(op.historicoTempos||{})[s]; if(h&&h.fim) t+=tempoUtilMin(h.inicio,h.fim); }); return t; }
+
+    // ===== PERMISSÕES (controle operacional) =====
+    function getPerms(){ try{ return JSON.parse(sessionStorage.getItem('calfer_perms')); }catch(e){ return null; } }
+    const PERM_FALLBACK = { apRecuar:'apontamento', apPDF:'apontamento', histExportar:'historico', histBackup:'historico' };
+    function podeAcessar(k){ const p=getPerms(); if(!p) return true; if(k in p) return !!p[k]; if(PERM_FALLBACK[k]) return !!p[PERM_FALLBACK[k]]; return false; }
+    function primeiraRota(){
+      if(podeAcessar('dashboard')) return 'index.html';
+      if(podeAcessar('apontamento')) return 'dados.html';
+      if(podeAcessar('ops')||podeAcessar('estrutura')||podeAcessar('operadores')) return 'cadastro.html';
+      if(podeAcessar('historico')) return 'historico.html';
+      return 'index.html';
+    }
+
+    // ===== HEADER UNIFICADO =====
+    function Header({ active, user, extra }){
+      const sair = () => { sessionStorage.removeItem('calfer_user'); sessionStorage.removeItem('calfer_perms'); window.location.href='index.html'; };
+      const Nav = ({href,id,children}) => (
+        <a href={href} className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition ${active===id?'bg-blue-600 text-white shadow-lg shadow-blue-600/30':'text-gray-400 hover:text-white hover:bg-gray-800'}`}>{children}</a>
+      );
+      return (
+        <header className="bg-[#0f1523] border border-gray-800 rounded-2xl px-4 py-2.5 flex flex-wrap gap-3 justify-between items-center mb-6">
+          <div className="flex items-center gap-4">
+            <div className="bg-white p-1.5 rounded-xl shadow"><img src="https://iili.io/CYuzbaV.png" alt="CALFER" className="h-9 object-contain"/></div>
+            <div className="border-r border-gray-800 pr-4 hidden sm:block">
+              <h1 className="text-xl font-black text-white leading-none tracking-tight">CONTROLE DE <span className="text-blue-500">OP</span></h1>
+              <p className="text-gray-500 text-[9px] font-bold tracking-[0.15em] mt-0.5">CALFER · CALDEIRARIA E FERRAMENTARIA</p>
+            </div>
+            <nav className="flex gap-1.5 flex-wrap">
+              {podeAcessar('dashboard') && <Nav href="index.html" id="dashboard">Dashboard</Nav>}
+              {podeAcessar('apontamento') && <Nav href="dados.html" id="apontamento">Apontamento</Nav>}
+              {(podeAcessar('ops')||podeAcessar('estrutura')||podeAcessar('operadores')) && <Nav href="cadastro.html" id="cadastros">Cadastros</Nav>}
+              {podeAcessar('historico') && <Nav href="historico.html" id="historico">Histórico</Nav>}
+            </nav>
+          </div>
+          <div className="flex items-center gap-3">
+            {extra}
+            {user && <span className="text-xs font-mono text-gray-300 bg-gray-800 px-3 py-1.5 rounded-lg">👤 {user}</span>}
+            <button onClick={sair} className="text-xs font-bold text-red-400 bg-red-950/40 border border-red-900 px-3 py-1.5 rounded-lg hover:bg-red-900/40">Sair</button>
+          </div>
+        </header>
+      );
+    }
+
+    function App(){
+      const user = sessionStorage.getItem('calfer_user');
+      useEffect(() => { if(!user){ window.location.href='index.html'; return; } if(!podeAcessar('historico')) window.location.href=primeiraRota(); }, []);
+      const [ordens, setOrdens] = useState([]);
+      const [aba, setAba] = useState('lista');
+
+      // filtros lista
+      const [ini, setIni] = useState('');
+      const [fim, setFim] = useState('');
+      const [sit, setSit] = useState('Todas');
+      const [busca, setBusca] = useState('');
+      const [expandida, setExpandida] = useState(null);
+      // aba por dia
+      const [dia, setDia] = useState(hojeStr());
+
+      useEffect(() => {
+        const u = db.collection('ordens').onSnapshot(snap => setOrdens(snap.docs.map(d=>({ ...d.data(), docId:d.id }))));
+        return () => u();
+      }, []);
+
+      // ===== LISTA FILTRADA =====
+      const listaFiltrada = useMemo(() => {
+        const b = busca.trim().toLowerCase();
+        return ordens.filter(op => {
+          const s = situacaoOP(op);
+          if (sit==='Em atraso'  && s!=='Em atraso') return false;
+          if (sit==='Concluídas' && s!=='Concluída') return false;
+          if (sit==='Canceladas' && s!=='Cancelada') return false;
+          if (sit==='Futuras'    && s!=='Futura') return false;
+          if (ini && (op.dataEntrega||'') < ini) return false;
+          if (fim && (op.dataEntrega||'') > fim) return false;
+          if (b && !`${op.id} ${op.cliente}`.toLowerCase().includes(b)) return false;
+          return true;
+        }).sort((a,b)=> (b.dataEntrega||'').localeCompare(a.dataEntrega||''));
+      }, [ordens, sit, ini, fim, busca]);
+
+      // KPIs do conjunto filtrado
+      const kpi = useMemo(() => {
+        const r = { total:listaFiltrada.length, atraso:0, concl:0, canc:0, fut:0, refugo:0, tempos:[] };
+        listaFiltrada.forEach(op => {
+          const s = situacaoOP(op);
+          if (s==='Em atraso') r.atraso++; if (s==='Concluída') r.concl++; if (s==='Cancelada') r.canc++; if (s==='Futura') r.fut++;
+          r.refugo += refugoTotal(op);
+          if (s==='Concluída') r.tempos.push(tempoTotalOP(op));
+        });
+        r.tempoMedio = r.tempos.length ? Math.round(r.tempos.reduce((a,b)=>a+b,0)/r.tempos.length) : 0;
+        return r;
+      }, [listaFiltrada]);
+
+      // ===== ATRASOS POR DIA (carry-forward) =====
+      const doDia = useMemo(() => {
+        return ordens.filter(op => {
+          if (op.cancelada || !op.dataEntrega) return false;
+          if (op.dataEntrega > dia) return false;              // ainda não venceu nesse dia
+          const fimISO = concluidaEmISO(op);
+          const fimDia = isoDia(fimISO);
+          if (fimDia && fimDia <= dia) return false;           // já estava concluída nesse dia
+          return true;                                          // vencida/aberta naquele dia
+        }).map(op => ({ ...op, _labelDia: op.dataEntrega < dia ? 'Em atraso' : 'Vence hoje', _atrasoNoDia: Math.max(0, diffDias(op.dataEntrega, dia)) }))
+          .sort((a,b)=> b._atrasoNoDia - a._atrasoNoDia);
+      }, [ordens, dia]);
+
+      const addDia = (n) => { const d=toDate(dia); d.setDate(d.getDate()+n); setDia(d.toISOString().slice(0,10)); };
+
+      // ===== EXPORT =====
+      const baixar = (nome, conteudo, tipo) => { const blob=new Blob([conteudo],{type:tipo}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=nome; a.click(); URL.revokeObjectURL(a.href); };
+      const exportarJSON = () => baixar(`backup-ops-${hojeStr()}.json`, JSON.stringify(ordens, null, 2), 'application/json');
+      const exportarCSV = () => {
+        const head = ['OP','Cliente','Maquina','Conjunto','NF','Total','Entrega','Criada','Concluida','Situacao','AtrasoDias','Refugo','TempoTotalMin'];
+        const linhas = listaFiltrada.map(op => [op.id, op.cliente, op.maquina, op.conjunto, op.notaFiscal, op.total, op.dataEntrega, isoDia(criadaEmISO(op))||'', isoDia(concluidaEmISO(op))||'', situacaoOP(op), atrasoDias(op), refugoTotal(op), tempoTotalOP(op)]
+          .map(v => `"${String(v??'').replace(/"/g,'""')}"`).join(','));
+        baixar(`historico-${hojeStr()}.csv`, [head.join(','), ...linhas].join('\n'), 'text/csv');
+      };
+
+      if (!user) return null;
+
+      const Chip = ({v}) => (
+        <button onClick={()=>setSit(v)} className={`text-xs font-bold px-3 py-1.5 rounded-full ${sit===v?'bg-blue-600 text-white':'bg-gray-800 text-gray-400 border border-gray-700'}`}>{v}</button>
+      );
+      const KpiBox = ({label,valor,cor}) => (<div className={`bg-[#0f1523] rounded-xl border-l-4 ${cor} px-3 py-2`}><p className="text-gray-400 text-[10px] font-bold uppercase leading-none">{label}</p><p className="text-2xl font-black mt-0.5 leading-none">{valor}</p></div>);
+
+      return (
+        <div className="max-w-7xl mx-auto pb-20">
+          <Header active="historico" user={user}/>
+
+          <div className="flex gap-2 mb-4">
+            <button onClick={()=>setAba('lista')} className={`px-4 py-2 text-xs font-bold uppercase rounded-lg ${aba==='lista'?'bg-blue-600':'bg-gray-800 text-gray-400'}`}>📋 Histórico</button>
+            <button onClick={()=>setAba('dia')} className={`px-4 py-2 text-xs font-bold uppercase rounded-lg ${aba==='dia'?'bg-blue-600':'bg-gray-800 text-gray-400'}`}>📅 Atrasos por dia</button>
+          </div>
+
+          {aba==='lista' && (<>
+            {/* FILTROS */}
+            <div className="bg-gray-800 p-3 rounded-xl border border-gray-700 mb-3 space-y-3">
+              <div className="flex flex-wrap gap-3 items-end">
+                <div><label className="block text-[10px] text-gray-400 font-bold uppercase mb-1">Entrega de</label><input type="date" value={ini} onChange={e=>setIni(e.target.value)} className="bg-gray-950 text-sm p-2 rounded border border-gray-700"/></div>
+                <div><label className="block text-[10px] text-gray-400 font-bold uppercase mb-1">até</label><input type="date" value={fim} onChange={e=>setFim(e.target.value)} className="bg-gray-950 text-sm p-2 rounded border border-gray-700"/></div>
+                <input value={busca} onChange={e=>setBusca(e.target.value)} placeholder="🔎 OP ou cliente" className="flex-1 min-w-[180px] bg-gray-950 text-sm p-2 rounded border border-gray-700"/>
+                <div className="flex gap-2">
+                  {podeAcessar('histExportar') && <button onClick={exportarCSV} className="text-xs font-bold bg-emerald-700 hover:bg-emerald-600 px-3 py-2 rounded-lg">⬇️ CSV</button>}
+                  {podeAcessar('histBackup') && <button onClick={exportarJSON} className="text-xs font-bold bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded-lg">💾 Backup JSON</button>}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">{['Todas','Em atraso','Concluídas','Canceladas','Futuras'].map(v=><Chip key={v} v={v}/>)}</div>
+            </div>
+
+            {/* KPIs */}
+            <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 mb-4">
+              <KpiBox label="No filtro" valor={kpi.total} cor="border-blue-500"/>
+              <KpiBox label="Em atraso" valor={kpi.atraso} cor="border-red-500"/>
+              <KpiBox label="Concluídas" valor={kpi.concl} cor="border-blue-400"/>
+              <KpiBox label="Canceladas" valor={kpi.canc} cor="border-gray-500"/>
+              <KpiBox label="Refugo (pçs)" valor={kpi.refugo} cor="border-orange-500"/>
+              <KpiBox label="Tempo médio" valor={fmtMin(kpi.tempoMedio)} cor="border-cyan-500"/>
+            </div>
+
+            {/* TABELA */}
+            <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-gray-950 text-gray-400 uppercase font-bold"><tr><th className="p-2"></th><th className="p-2">OP</th><th className="p-2">Cliente / Estrutura</th><th className="p-2 text-center">Entrega</th><th className="p-2 text-center">Concluída</th><th className="p-2 text-center">Situação</th><th className="p-2 text-center">Atraso</th><th className="p-2 text-center">Refugo</th></tr></thead>
+                <tbody className="divide-y divide-gray-700">
+                  {listaFiltrada.length===0 && <tr><td colSpan="8" className="p-4 text-center text-gray-600">Nenhuma OP com esse filtro.</td></tr>}
+                  {listaFiltrada.map(op => {
+                    const s = situacaoOP(op); const at = atrasoDias(op); const aberta = expandida===op.docId; const r = op.roteiro||[];
+                    return (
+                      <React.Fragment key={op.docId}>
+                        <tr className="hover:bg-gray-900/30 cursor-pointer" onClick={()=>setExpandida(aberta?null:op.docId)}>
+                          <td className="p-2 text-gray-500">{aberta?'▾':'▸'}</td>
+                          <td className="p-2 font-mono font-bold text-blue-400">{op.id}</td>
+                          <td className="p-2"><span className="text-gray-200 font-bold">{op.cliente}</span><br/><span className="text-gray-500">{op.maquina} › {op.conjunto}</span></td>
+                          <td className="p-2 text-center font-mono text-gray-300">{brData(op.dataEntrega)}</td>
+                          <td className="p-2 text-center font-mono text-gray-400">{brData(isoDia(concluidaEmISO(op)))}</td>
+                          <td className="p-2 text-center"><span className={`text-[10px] font-black px-2 py-0.5 rounded uppercase ${corSit[s]}`}>{s}</span></td>
+                          <td className={`p-2 text-center font-bold ${at>0?'text-red-400':'text-gray-600'}`}>{at>0?`${at}d`:'—'}</td>
+                          <td className={`p-2 text-center font-bold ${refugoTotal(op)>0?'text-red-400':'text-gray-600'}`}>{refugoTotal(op)||'—'}</td>
+                        </tr>
+                        {aberta && (
+                          <tr className="bg-gray-950/50"><td colSpan="8" className="p-3">
+                            <div className="flex flex-wrap gap-4 text-[11px] mb-2 text-gray-400">
+                              <span>NF: <b className="text-gray-200">{op.notaFiscal||'—'}</b></span>
+                              <span>Meta: <b className="text-gray-200">{op.total} pç</b></span>
+                              <span>Criada: <b className="text-gray-200">{brData(isoDia(criadaEmISO(op)))}</b></span>
+                              <span>Tempo total útil: <b className="text-cyan-300">{fmtMin(tempoTotalOP(op))}</b></span>
+                              {op.cancelada && <span className="text-gray-300">Cancelada por <b>@{op.canceladaPor||'?'}</b> em {brData(isoDia(op.canceladaEm))}</span>}
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                              {r.map((setor,i)=>{ const h=(op.historicoTempos||{})[setor]; const qtd=h&&typeof h.qtd==='number'?h.qtd:null; const ref=qtd!==null?Math.max(0,entradaSetor(op,i)-qtd):null; const feito=i<(op.etapaAtual||0);
+                                return (<div key={setor} className={`px-2 py-1.5 rounded-lg flex justify-between items-center ${feito?'bg-gray-800':'bg-gray-900 opacity-60'}`}>
+                                  <span className="font-bold uppercase text-gray-200">{i+1}. {setor}</span>
+                                  <span className="text-right text-[10px] text-gray-400">{h?.por?`@${h.por} · `:''}{qtd!==null?`${qtd}pç `:''}{ref?<b className="text-red-400">-{ref} </b>:''}{h&&h.fim?fmtMin(tempoUtilMin(h.inicio,h.fim)):(feito?'':'aguardando')}</span>
+                                </div>);
+                              })}
+                            </div>
+                          </td></tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>)}
+
+          {aba==='dia' && (<>
+            <div className="bg-gray-800 p-3 rounded-xl border border-gray-700 mb-4 flex flex-wrap items-center gap-3 justify-between">
+              <div className="flex items-center gap-2">
+                <button onClick={()=>addDia(-1)} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded-lg font-bold">◀</button>
+                <input type="date" value={dia} onChange={e=>setDia(e.target.value)} className="bg-gray-950 text-sm p-2 rounded border border-gray-700"/>
+                <button onClick={()=>addDia(1)} className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded-lg font-bold">▶</button>
+                <button onClick={()=>setDia(hojeStr())} className="text-xs bg-blue-600 px-3 py-2 rounded-lg font-bold">Hoje</button>
+              </div>
+              <p className="text-sm text-gray-300"><b className="text-red-400 text-lg">{doDia.length}</b> OP(s) em aberto/atraso em <b className="text-white">{brData(dia)}</b></p>
+            </div>
+            <p className="text-xs text-gray-500 mb-3">Uma OP vencida aparece aqui em <b>todos os dias</b> desde a data de entrega até ser concluída. Navegue por ◀ ▶ pra ver o passado ou projetar o futuro.</p>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {doDia.length===0 && <div className="col-span-full text-center text-gray-600 py-10">Nenhuma OP em atraso/aberta neste dia. 🎉</div>}
+              {doDia.map(op => {
+                const setor = (op.roteiro||[])[op.etapaAtual] || 'FIM';
+                return (
+                  <div key={op.docId} className={`p-3 rounded-xl border-2 ${op._labelDia==='Em atraso'?'border-red-600 bg-red-950/30':'border-amber-500 bg-amber-950/20'}`}>
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="font-mono font-black text-blue-400">{op.id}</span>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded uppercase ${op._labelDia==='Em atraso'?'bg-red-600':'bg-amber-500 text-black'}`}>{op._labelDia}{op._atrasoNoDia>0?` ${op._atrasoNoDia}d`:''}</span>
+                    </div>
+                    <p className="text-sm font-bold truncate">{op.cliente}</p>
+                    <p className="text-xs text-gray-400 truncate">{op.maquina} › {op.conjunto}</p>
+                    <div className="flex justify-between text-xs mt-2 text-gray-400"><span>Setor: <b className="text-amber-400 uppercase">{setor}</b></span><span>Entrega: <b className="text-gray-200 font-mono">{brData(op.dataEntrega)}</b></span></div>
+                  </div>
+                );
+              })}
+            </div>
+          </>)}
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+
+  <!-- ===== PWA: service worker + botão instalar ===== -->
+  <script>
+    if ('serviceWorker' in navigator) { window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{})); }
+    let deferredPrompt = null;
+    window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredPrompt = e; const b=document.getElementById('pwa-install'); if(b) b.style.display='flex'; });
+    window.addEventListener('DOMContentLoaded', () => {
+      const btn = document.createElement('button');
+      btn.id='pwa-install'; btn.textContent='⬇️ Instalar app';
+      btn.style.cssText='display:none;align-items:center;position:fixed;bottom:16px;left:16px;z-index:9999;background:#2563eb;color:#fff;font-weight:800;font-size:12px;padding:10px 14px;border:none;border-radius:12px;box-shadow:0 4px 14px rgba(37,99,235,.4);cursor:pointer;';
+      btn.onclick=async()=>{ if(!deferredPrompt) return; deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt=null; btn.style.display='none'; };
+      document.body.appendChild(btn);
+    });
+    window.addEventListener('appinstalled', () => { const b=document.getElementById('pwa-install'); if(b) b.style.display='none'; });
+  </script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+rules_version = '2';
+
+// ============================================================
+//  REGRAS CALFER  —  cole em: Firebase Console > Firestore > Regras
+// ------------------------------------------------------------
+//  IMPORTANTE: seu app hoje NÃO usa Firebase Auth (o login é uma
+//  coleção "usuarios" sua). Sem Auth, não dá pra distinguir "seu
+//  operador" de "qualquer um da internet" só pelas regras.
+//
+//  A trava REAL de baixo esforço aqui é o APP CHECK: ele bloqueia
+//  qualquer cliente que NÃO seja o seu próprio site (curl, robôs,
+//  scripts de terceiros). As regras abaixo exigem App Check.
+//
+//  >>> Enquanto você NÃO ativar o App Check, troque
+//      "request.app != null" por "true" nas 3 linhas, senão o
+//      painel para de funcionar. Mas trate isso como PROVISÓRIO. <<<
+// ============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Ordens de produção
+    match /ordens/{opId} {
+      allow read, write: if request.app != null;
+    }
+
+    // Parâmetros (clientes, máquinas, conjuntos...)
+    match /parametros/{doc} {
+      allow read, write: if request.app != null;
+    }
+
+    // Operadores — leitura liberada (o login precisa ler pra validar),
+    // escrita só via App Check. A senha aqui já vai HASHEADA pelo app.
+    match /usuarios/{login} {
+      allow read, write: if request.app != null;
+    }
+  }
+}
